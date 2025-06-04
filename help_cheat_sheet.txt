@@ -1,0 +1,46 @@
+  -h, --help            show this help message and exit
+  yolo_model            path to YOLO weights for detection
+  reid_model            path to ReID model weights
+  --source SOURCE       file/dir/URL/glob, 0 for webcam
+  --imgsz IMGSZ [IMGSZ ...], --img-size IMGSZ [IMGSZ ...]
+                        inference size h,w
+  --fps FPS             video frame-rate
+  --conf CONF           min confidence threshold
+  --iou IOU             IoU threshold for NMS
+  --device DEVICE       cuda device(s), e.g. 0 or 0,1,2,3 or cpu
+  classes               filter by class indices
+  --project PROJECT     save results to project/name
+  --name NAME           save results to project/name
+  --exist-ok            existing project/name ok, do not increment
+  --half                use FP16 half-precision inference
+  --vid-stride VID_STRIDE
+                        video frame-rate stride
+  --ci                  reuse existing runs in CI (no UI)
+  --tracking-method TRACKING_METHOD
+                        deepocsort, strongsort. ocsort, bytetrack, botsort, boosttrack
+  --dets-file-path DETS_FILE_PATH
+                        path to precomputed detections file
+  --embs-file-path EMBS_FILE_PATH
+                        path to precomputed embeddings file
+  --exp-folder-path EXP_FOLDER_PATH
+                        path to experiment folder
+  --verbose             print detailed logs
+  --agnostic-nms        class-agnostic NMS
+  --gsi                 apply Gaussian smoothing interpolation
+  --n-trials N_TRIALS   number of trials for evolutionary tuning
+  --objectives OBJECTIVES [OBJECTIVES ...]
+                        objectives for tuning: HOTA, MOTA, IDF1
+  --val-tools-path VAL_TOOLS_PATH
+                        where to clone trackeval
+  --split-dataset       use second half of dataset
+  --show                display tracking in a window
+  --show-labels         hide detection labels
+  --show-conf           hide detection confidences
+  --show-trajectories   overlay past trajectories
+  --save-txt            save results to a .txt file
+  --save-crop           save cropped detections
+  --save                save annotated video
+  --line-width LINE_WIDTH
+                        bounding box line width
+  --per-class           track each class separately
+
