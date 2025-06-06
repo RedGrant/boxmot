@@ -13,53 +13,61 @@ def get_video_fps(video_path):
     return int(fps)
 
 
-def rename_model_weights(yolo_model_type="mediumaug"):
+def get_model_weights(yolo_model_type="mediumaug"):
     """
-    Rename best.pt files to yolov8_{model_name}.pt format
+    Get model weights paths - rename only if not already renamed
     """
-    models = {
-        "normal_950": f"../yolo8{yolo_model_type}_results/normal_950/weights/best.pt",
-        "normal_1200": f"../yolo8{yolo_model_type}_results/normal_1200/weights/best.pt",
-        "normal_1400": f"../yolo8{yolo_model_type}_results/normal_1400/weights/best.pt",
-        "binary_50_closing_KNN_950": f"../yolo8{yolo_model_type}_results/binary_50_closing_KNN_950/weights/best.pt",
-        "binary_50_closing_KNN_1200": f"../yolo8{yolo_model_type}_results/binary_50_closing_KNN_1200/weights/best.pt",
-        "binary_50_closing_KNN_1400": f"../yolo8{yolo_model_type}_results/binary_50_closing_KNN_1400/weights/best.pt",
-        "binary_250_closing_KNN_950": f"../yolo8{yolo_model_type}_results/binary_250_closing_KNN_950/weights/best.pt",
-        "binary_250_closing_KNN_1200": f"../yolo8{yolo_model_type}_results/binary_250_closing_KNN_1200/weights/best.pt",
-        "binary_250_closing_KNN_1400": f"../yolo8{yolo_model_type}_results/binary_250_closing_KNN_1400/weights/best.pt",
-        "adaptive_gaussian_11_opening_KNN_950": f"../yolo8{yolo_model_type}_results/adaptive_gaussian_11_opening_KNN_950/weights/best.pt",
-        "adaptive_gaussian_11_opening_KNN_1200": f"../yolo8{yolo_model_type}_results/adaptive_gaussian_11_opening_KNN_1200/weights/best.pt",
-        "adaptive_gaussian_11_opening_KNN_1400": f"../yolo8{yolo_model_type}_results/adaptive_gaussian_11_opening_KNN_1400/weights/best.pt"
-    }
-
-    renamed_models = {}
     weights_dir = "renamed_weights"
     os.makedirs(weights_dir, exist_ok=True)
 
-    for model_name, model_path in models.items():
-        if os.path.exists(model_path):
-            new_name = f"yolov8_{model_name}_{yolo_model_type}.pt"
-            new_path = os.path.join(weights_dir, new_name)
-            shutil.copy2(model_path, new_path)
+    model_names = [
+        "normal_950", "normal_1200", "normal_1400",
+        "binary_50_closing_KNN_950", "binary_50_closing_KNN_1200", "binary_50_closing_KNN_1400",
+        "binary_250_closing_KNN_950", "binary_250_closing_KNN_1200", "binary_250_closing_KNN_1400",
+        "adaptive_gaussian_11_opening_KNN_950", "adaptive_gaussian_11_opening_KNN_1200",
+        "adaptive_gaussian_11_opening_KNN_1400"
+    ]
+
+    renamed_models = {}
+    models_to_copy = {}
+
+    # Check which models already exist in renamed format
+    for model_name in model_names:
+        new_name = f"yolov8_{model_name}_{yolo_model_type}.pt"
+        new_path = os.path.join(weights_dir, new_name)
+
+        if os.path.exists(new_path):
             renamed_models[model_name] = new_path
-            print(f"Copied {model_path} -> {new_path}")
+            print(f"Found existing renamed model: {new_path}")
         else:
-            print(f"Warning: Model file not found: {model_path}")
+            # Need to copy from original location
+            original_path = f"../../yolo8{yolo_model_type}_results/{model_name}/weights/best.pt"
+            models_to_copy[model_name] = (original_path, new_path)
+
+    # Copy models that don't exist in renamed format
+    if models_to_copy:
+        print(f"Copying {len(models_to_copy)} models that haven't been renamed yet...")
+        for model_name, (original_path, new_path) in models_to_copy.items():
+            if os.path.exists(original_path):
+                shutil.copy2(original_path, new_path)
+                renamed_models[model_name] = new_path
+                print(f"Copied {original_path} -> {new_path}")
+            else:
+                print(f"Warning: Model file not found: {original_path}")
+    else:
+        print(f"All models for {yolo_model_type} are already renamed - skipping copy step")
 
     return renamed_models
 
 
-def run_boxmot_tracking(yolo_model_path, video_path, method, output_dir, conf_level=0.25):
+def run_boxmot_tracking(yolo_model_path, video_path, method, conf_level=0.25):
     """
     Run BoxMOT tracking on a single video
     """
     # Get video FPS
     fps = get_video_fps(video_path)
 
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-
-    # BoxMOT command
+    # BoxMOT command (let it use default output location)
     cmd = [
         "boxmot", "track",
         "--yolo-model", yolo_model_path,
@@ -68,51 +76,67 @@ def run_boxmot_tracking(yolo_model_path, video_path, method, output_dir, conf_le
         "--save",
         "--save-txt",
         "--fps", str(fps),
-        "--conf", str(conf_level),
-        "--project", output_dir,
-        "--name", "track"
+        "--conf", str(conf_level)
     ]
 
     try:
         print(f"Running: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         print(f"Success: {video_path} with {method}")
-        return True
+
+        # BoxMOT saves to runs/track by default
+        default_output = "runs/track"
+        return default_output if os.path.exists(default_output) else None
+
     except subprocess.CalledProcessError as e:
         print(f"Error processing {video_path} with {method}: {e}")
         print(f"stdout: {e.stdout}")
         print(f"stderr: {e.stderr}")
+        return None
+
+
+def organize_results(boxmot_output_dir, final_output_dir, model_name, method, video_filename):
+    """
+    Organize results from BoxMOT default output to structured folders
+    """
+    if not os.path.exists(boxmot_output_dir):
+        print(f"Warning: BoxMOT output directory not found: {boxmot_output_dir}")
         return False
 
-
-def organize_results(temp_output_dir, final_output_dir, model_name, video_type, frequency, method):
-    """
-    Organize results into the desired folder structure
-    """
-    # Source directories
-    track_dir = os.path.join(temp_output_dir, "track")
-
-    if not os.path.exists(track_dir):
-        print(f"Warning: Track directory not found: {track_dir}")
-        return
-
-    # Final output structure: results/{yolo_model_type}/{video_type}_{frequency}/{method}/
-    final_dir = os.path.join(final_output_dir, model_name, method)
+    # Final output structure: boxmot_results/{model_name}/{method}/{video_name}/
+    video_name = os.path.splitext(video_filename)[0]  # Remove .mp4 extension
+    final_dir = os.path.join(final_output_dir, model_name, method, video_name)
     os.makedirs(final_dir, exist_ok=True)
 
-    # Move video and labels
-    for item in os.listdir(track_dir):
-        src_path = os.path.join(track_dir, item)
-        dst_path = os.path.join(final_dir, item)
-
-        if os.path.isdir(src_path):
-            if os.path.exists(dst_path):
-                shutil.rmtree(dst_path)
-            shutil.copytree(src_path, dst_path)
-        else:
+    # Copy video file (if exists)
+    for item in os.listdir(boxmot_output_dir):
+        if item.endswith(('.avi', '.mp4', '.mov')):
+            src_path = os.path.join(boxmot_output_dir, item)
+            dst_path = os.path.join(final_dir, item)
             shutil.copy2(src_path, dst_path)
+            print(f"Copied video: {src_path} -> {dst_path}")
+
+    # Copy labels directory
+    labels_src = os.path.join(boxmot_output_dir, "labels")
+    if os.path.exists(labels_src):
+        labels_dst = os.path.join(final_dir, "labels")
+        if os.path.exists(labels_dst):
+            shutil.rmtree(labels_dst)
+        shutil.copytree(labels_src, labels_dst)
+        print(f"Copied labels: {labels_src} -> {labels_dst}")
 
     print(f"Results organized in: {final_dir}")
+    return True
+
+
+def clean_boxmot_runs():
+    """
+    Clean the runs directory after processing
+    """
+    runs_dir = "runs"
+    if os.path.exists(runs_dir):
+        shutil.rmtree(runs_dir)
+        print("Cleaned BoxMOT runs directory")
 
 
 def main():
@@ -122,7 +146,7 @@ def main():
     frequencies = ["950", "1200", "1400"]
     tracking_methods = ["deepocsort", "strongsort", "ocsort", "bytetrack", "botsort", "boosttrack"]
 
-    conf_level = 0.25  # Confidence threshold
+    conf_level = 0.6  # Confidence threshold
 
     class_names = ['Aluminum_tube', 'Fish_cage', 'Fish_net', 'Floating_floor_wood', 'Plastic_Deck', 'PVC_cone',
                    'PVC_perforated_deck', 'PVC_Square', 'Vinyl', 'Wooden_deck', 'PVC_Blue_Square', 'rope']
@@ -131,8 +155,8 @@ def main():
     for yolo_model_type in yolo_model_types:
         print(f"\n=== Processing YOLO model type: {yolo_model_type} ===")
 
-        # Rename model weights
-        renamed_models = rename_model_weights(yolo_model_type)
+        # Get model weights (rename only if needed)
+        renamed_models = get_model_weights(yolo_model_type)
 
         if not renamed_models:
             print(f"No models found for {yolo_model_type}, skipping...")
@@ -148,7 +172,7 @@ def main():
             video_type = '_'.join(parts[:-1])  # Everything except last part
 
             # Input video directory
-            input_video_dir = f"../input_videos/{video_type}"
+            input_video_dir = f"../../input_videos/{video_type}"
 
             if not os.path.exists(input_video_dir):
                 print(f"Video directory not found: {input_video_dir}")
@@ -173,33 +197,29 @@ def main():
                 for method in tracking_methods:
                     print(f"    Tracking method: {method}")
 
-                    # Temporary output directory for BoxMOT
-                    temp_output_dir = f"temp_boxmot_output_{model_name}_{method}"
-
-                    # Run BoxMOT
-                    success = run_boxmot_tracking(
+                    # Run BoxMOT (it will output to runs/track by default)
+                    boxmot_output_dir = run_boxmot_tracking(
                         yolo_model_path=model_path,
                         video_path=video_path,
                         method=method,
-                        output_dir=temp_output_dir,
                         conf_level=conf_level
                     )
 
-                    if success:
+                    if boxmot_output_dir:
                         # Organize results
                         final_output_dir = "boxmot_results"
+                        model_full_name = f"{yolo_model_type}_{model_name}"
+
                         organize_results(
-                            temp_output_dir=temp_output_dir,
+                            boxmot_output_dir=boxmot_output_dir,
                             final_output_dir=final_output_dir,
-                            model_name=f"{yolo_model_type}_{video_type}_{frequency}",
-                            video_type=video_type,
-                            frequency=frequency,
-                            method=method
+                            model_name=model_full_name,
+                            method=method,
+                            video_filename=filename
                         )
 
-                    # Clean up temporary directory
-                    if os.path.exists(temp_output_dir):
-                        shutil.rmtree(temp_output_dir)
+                        # Clean up BoxMOT's default runs directory after organizing
+                        clean_boxmot_runs()
 
     print("\n=== Processing completed ===")
 
