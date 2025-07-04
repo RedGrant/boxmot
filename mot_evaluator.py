@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
+import matplotlib.pyplot as plt
 
 class MOTEvaluator:
     def __init__(self, iou_threshold: float = 0.5):
@@ -95,10 +96,9 @@ class MOTEvaluator:
         motp_sum = motp_count = 0
         id_switches = 0
 
-        # Track ID associations for IDF1 and ID switches
         gt_to_pred_associations = defaultdict(list)
         pred_to_gt_associations = defaultdict(list)
-        gt_trajectories = defaultdict(list)  # For tracking ID switches
+        gt_trajectories = defaultdict(list)
 
         frame_ids = sorted(self.frames.keys())
 
@@ -124,10 +124,9 @@ class MOTEvaluator:
                 for j, pred_id in enumerate(pred_ids):
                     iou_matrix[i, j] = self.compute_iou(gt_boxes[gt_id], pred_boxes[pred_id])
 
-            # Find matches
+            # Hungarian assignment
             matches = self.hungarian_assignment(iou_matrix)
 
-            # Update counters
             tp_frame = len(matches)
             fp_frame = len(pred_ids) - tp_frame
             fn_frame = len(gt_ids) - tp_frame
@@ -136,12 +135,11 @@ class MOTEvaluator:
             fp_total += fp_frame
             fn_total += fn_frame
 
-            # Update MOTP
+            # MOTP: distance-based
             if matches:
                 motp_sum += sum(1 - iou for _, _, iou in matches)
                 motp_count += len(matches)
 
-            # Track ID associations for IDF1 and ID switches
             current_gt_to_pred = {}
             for i, j, iou in matches:
                 gt_id, pred_id = gt_ids[i], pred_ids[j]
@@ -150,39 +148,33 @@ class MOTEvaluator:
                 current_gt_to_pred[gt_id] = pred_id
                 gt_trajectories[gt_id].append((frame_id, pred_id))
 
-        # Calculate ID switches
+        # Count ID switches
         for gt_id, trajectory in gt_trajectories.items():
-            if len(trajectory) > 1:
-                for i in range(1, len(trajectory)):
-                    if trajectory[i][1] != trajectory[i - 1][1]:
-                        id_switches += 1
+            for i in range(1, len(trajectory)):
+                if trajectory[i][1] != trajectory[i - 1][1]:
+                    id_switches += 1
 
-        # Calculate basic metrics
         total_gt = tp_total + fn_total
         mota = 1 - (fn_total + fp_total + id_switches) / total_gt if total_gt > 0 else 0.0
         motp = motp_sum / motp_count if motp_count > 0 else 0.0
         precision = tp_total / (tp_total + fp_total) if (tp_total + fp_total) > 0 else 0.0
         recall = tp_total / (tp_total + fn_total) if (tp_total + fn_total) > 0 else 0.0
 
-        # Calculate IDF1
+        # IDF1 calculation
         idfp = idfn = idtp = 0
 
-        # Count identity matches
         for gt_id, pred_ids in gt_to_pred_associations.items():
             if pred_ids:
-                # Find the most frequent prediction ID for this ground truth ID
                 most_common_pred = max(set(pred_ids), key=pred_ids.count)
                 idtp += pred_ids.count(most_common_pred)
                 idfp += len(pred_ids) - pred_ids.count(most_common_pred)
             else:
                 idfn += 1
 
-        # Count unmatched predictions
         for pred_id, gt_ids in pred_to_gt_associations.items():
             if not gt_ids:
                 idfp += 1
 
-        # Add unmatched ground truth IDs
         for gt_id in self.gt_ids:
             if gt_id not in gt_to_pred_associations:
                 idfn += 1
@@ -191,6 +183,44 @@ class MOTEvaluator:
         idf1_recall = idtp / (idtp + idfn) if (idtp + idfn) > 0 else 0.0
         idf1 = 2 * idf1_precision * idf1_recall / (idf1_precision + idf1_recall) if (
                                                                                             idf1_precision + idf1_recall) > 0 else 0.0
+
+        # Mostly Tracked / Partly Tracked / Mostly Lost
+        mostly_tracked = partly_tracked = mostly_lost = 0
+
+        for gt_id in self.gt_ids:
+            total_frames = sum(1 for frame_id in frame_ids if gt_id in self.frames[frame_id]['gt'])
+            matched_frames = sum(1 for frame_id in frame_ids
+                                 if gt_id in self.frames[frame_id]['gt']
+                                 and any(gt_ids[i] == gt_id for i, _, _ in self.hungarian_assignment(
+                np.array([[self.compute_iou(self.frames[frame_id]['gt'][gt_id],
+                                            self.frames[frame_id]['pred'][pred_id])]
+                          for pred_id in self.frames[frame_id]['pred'].keys()])
+            )))
+
+            if total_frames == 0:
+                continue
+
+            match_ratio = matched_frames / total_frames
+            if match_ratio >= 0.8:
+                mostly_tracked += 1
+            elif match_ratio >= 0.2:
+                partly_tracked += 1
+            else:
+                mostly_lost += 1
+
+        # Fragmentations
+        fragmentations = 0
+        for gt_id, traj in gt_trajectories.items():
+            if len(traj) < 2:
+                continue
+            prev_frame = traj[0][0]
+            frags = 0
+            for i in range(1, len(traj)):
+                curr_frame = traj[i][0]
+                if curr_frame - prev_frame > 1:
+                    frags += 1
+                prev_frame = curr_frame
+            fragmentations += frags
 
         return {
             'MOTA': mota,
@@ -202,10 +232,10 @@ class MOTEvaluator:
             'FP': fp_total,
             'FN': fn_total,
             'ID_Switches': id_switches,
-            'Fragmentations': len([traj for traj in gt_trajectories.values() if len(traj) > 1]),
-            'Mostly_Tracked': len([gt_id for gt_id in self.gt_ids if len(gt_to_pred_associations[gt_id]) > 0]),
-            'Partly_Tracked': 0,  # Would need more complex logic
-            'Mostly_Lost': len([gt_id for gt_id in self.gt_ids if len(gt_to_pred_associations[gt_id]) == 0])
+            'Fragmentations': fragmentations,
+            'Mostly_Tracked': mostly_tracked,
+            'Partly_Tracked': partly_tracked,
+            'Mostly_Lost': mostly_lost
         }
 
 
@@ -550,22 +580,110 @@ def run_evaluation(results_dir: str, gt_dir: str, output_file: str = "evaluation
             print(f"{metric_name:<15}: {stats['mean']:.3f} ± {stats['std']:.3f} "
                   f"(min: {stats['min']:.3f}, max: {stats['max']:.3f}, n={stats['count']})")
 
-    # Print top performing combinations
-    print(f"\n{'Top Performing Model-Method Combinations (by MOTA)':<60}")
-    print(f"{'-' * 80}")
-    top_combinations = []
+    # Print top performing combinations (extended metrics)
+    print(f"\n{'Top Performing Model-Method Combinations (by MOTA)':<100}")
+    print(f"{'-' * 120}")
+
+    # Collect all combinations
+    all_combinations = []
     for model in model_method_summary:
         for method in model_method_summary[model]:
             combo_data = model_method_summary[model][method]
-            top_combinations.append((f"{model}_{method}", combo_data['avg_MOTA'],
-                                     combo_data['avg_IDF1'], combo_data['count'], combo_data['total_frames']))
+            all_combinations.append((
+                f"{model}_{method}",
+                combo_data.get('avg_MOTA', 0.0),
+                combo_data.get('avg_IDF1', 0.0),
+                combo_data.get('avg_MOTP', 0.0),
+                combo_data.get('avg_Precision', 0.0),
+                combo_data.get('avg_Recall', 0.0),
+                combo_data['count'],
+                combo_data['total_frames']
+            ))
 
-    top_combinations.sort(key=lambda x: x[1], reverse=True)
+    # Define column widths
+    name_width = 65
+    metric_width = 10
 
-    print(f"{'Model_Method':<50} {'MOTA':<8} {'IDF1':<8} {'Seqs':<6} {'Frames':<8}")
-    print(f"{'-' * 80}")
-    for combo, mota, idf1, count, frames in top_combinations[:10]:  # Top 10
-        print(f"{combo:<50} {mota:.3f}    {idf1:.3f}    {count:<6} {frames:<8}")
+    # Print header
+    print(f"\n{'Model_Method':<{name_width}}"
+          f"{'MOTA':<{metric_width}}"
+          f"{'IDF1':<{metric_width}}"
+          f"{'MOTP':<{metric_width}}"
+          f"{'Precision':<{metric_width}}"
+          f"{'Recall':<{metric_width}}"
+          f"{'Seqs':<6}"
+          f"{'Frames':<10}")
+    print("-" * (name_width + 5 * metric_width + 6 + 10))
+
+    # Print all combinations
+    for combo in all_combinations:
+        print(f"{combo[0]:<{name_width}}"
+              f"{combo[1]:<{metric_width}.3f}"
+              f"{combo[2]:<{metric_width}.3f}"
+              f"{combo[3]:<{metric_width}.3f}"
+              f"{combo[4]:<{metric_width}.3f}"
+              f"{combo[5]:<{metric_width}.3f}"
+              f"{combo[6]:<6}"
+              f"{combo[7]:<10}")
+
+    report_path = "methods_performance_report.txt"
+
+    with open(report_path, "w") as f:
+        f.write(f"{'Model_Method':<{name_width}}"
+                f"{'MOTA':<{metric_width}}"
+                f"{'IDF1':<{metric_width}}"
+                f"{'MOTP':<{metric_width}}"
+                f"{'Precision':<{metric_width}}"
+                f"{'Recall':<{metric_width}}"
+                f"{'Seqs':<6}"
+                f"{'Frames':<10}\n")
+        f.write("-" * (name_width + 5 * metric_width + 6 + 10) + "\n")
+
+        for combo in all_combinations:
+            f.write(f"{combo[0]:<{name_width}}"
+                    f"{combo[1]:<{metric_width}.3f}"
+                    f"{combo[2]:<{metric_width}.3f}"
+                    f"{combo[3]:<{metric_width}.3f}"
+                    f"{combo[4]:<{metric_width}.3f}"
+                    f"{combo[5]:<{metric_width}.3f}"
+                    f"{combo[6]:<6}"
+                    f"{combo[7]:<10}\n")
+
+    sorted_combos = sorted(all_combinations, key=lambda x: x[1], reverse=True)
+
+    # Extract for plotting
+    labels = [c[0] for c in sorted_combos]
+    motas = [c[1] for c in sorted_combos]
+    idf1s = [c[2] for c in sorted_combos]
+    precisions = [c[4] for c in sorted_combos]
+    recalls = [c[5] for c in sorted_combos]
+
+    # Plot
+    plt.figure(figsize=(14, 6))
+    plt.barh(labels, motas, color="skyblue")
+    plt.xlabel("MOTA")
+    plt.title("MOTA by Model-Method Combination")
+    plt.gca().invert_yaxis()
+    plt.tight_layout()
+    plt.savefig("mota_by_model_method.png")
+    plt.show()
+
+    x = np.arange(len(labels))
+    width = 0.15
+
+    plt.figure(figsize=(16, 7))
+    plt.bar(x - 2 * width, motas, width, label='MOTA')
+    plt.bar(x - width, idf1s, width, label='IDF1')
+    plt.bar(x, precisions, width, label='Precision')
+    plt.bar(x + width, recalls, width, label='Recall')
+
+    plt.xticks(x, labels, rotation=45, ha='right')
+    plt.ylabel("Score")
+    plt.title("Tracking Metrics by Model-Method")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("tracking_metrics_comparison.png")
+    plt.show()
 
     return final_results
 

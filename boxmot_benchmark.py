@@ -145,7 +145,6 @@ def main():
     video_types = ["normal", "adaptive_gaussian_11_opening_KNN", "binary_50_closing_KNN", "binary_250_closing_KNN"]
     frequencies = ["950", "1200", "1400"]
     tracking_methods = ["deepocsort", "strongsort", "ocsort", "bytetrack", "botsort", "boosttrack"]
-
     conf_level = 0.6  # Confidence threshold
 
     class_names = ['Aluminum_tube', 'Fish_cage', 'Fish_net', 'Floating_floor_wood', 'Plastic_Deck', 'PVC_cone',
