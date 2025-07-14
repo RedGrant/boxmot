@@ -9,6 +9,7 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 import seaborn as sns
+from math import pi
 class MOTEvaluator:
     def __init__(self, iou_threshold: float = 0.5):
         self.iou_threshold = iou_threshold
@@ -428,8 +429,403 @@ def find_ground_truth_sequence(gt_base_dir: str, sequence_name: str) -> Optional
 
     return None
 
+
+def _create_performance_heatmap(df, plots_dir):
+    """Create performance heatmaps for each metric."""
+    print("Creating performance heatmaps...")
+
+    # Create heatmaps for each metric
+    metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
+
+    for metric in metrics:
+        # Create pivot table for heatmap
+        pivot_data = df.pivot_table(
+            values=metric,
+            index='model',
+            columns='method',
+            aggfunc='mean'
+        )
+
+        # Create the heatmap
+        plt.figure(figsize=(12, 8))
+
+        # Special handling for MOTP (lower is better)
+        if metric == 'MOTP':
+            # Use reverse colormap for MOTP since lower is better
+            cmap = 'RdYlGn'  # Red for high (bad), Green for low (good)
+            title = f'{metric} Performance Heatmap (Lower is Better)'
+        else:
+            cmap = 'RdYlGn_r'  # Red for low (bad), Green for high (good)
+            title = f'{metric} Performance Heatmap'
+
+        sns.heatmap(pivot_data,
+                    annot=True,
+                    fmt='.3f',
+                    cmap=cmap,
+                    center=pivot_data.mean().mean(),
+                    square=True,
+                    linewidths=0.5,
+                    cbar_kws={'label': metric})
+
+        plt.title(title, fontsize=14, fontweight='bold', pad=20)
+        plt.xlabel('Method', fontsize=12, fontweight='bold')
+        plt.ylabel('Model', fontsize=12, fontweight='bold')
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f'{metric}_heatmap.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+
+    # Create a combined overview heatmap
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+
+    for i, metric in enumerate(metrics):
+        ax = axes[i]
+
+        pivot_data = df.pivot_table(
+            values=metric,
+            index='model',
+            columns='method',
+            aggfunc='mean'
+        )
+
+        # Special handling for MOTP
+        if metric == 'MOTP':
+            cmap = 'RdYlGn'
+            title = f'{metric} (Lower is Better)'
+        else:
+            cmap = 'RdYlGn_r'
+            title = metric
+
+        sns.heatmap(pivot_data,
+                    annot=True,
+                    fmt='.3f',
+                    cmap=cmap,
+                    center=pivot_data.mean().mean(),
+                    square=True,
+                    linewidths=0.5,
+                    ax=ax,
+                    cbar_kws={'label': metric})
+
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xlabel('Method', fontsize=10, fontweight='bold')
+        ax.set_ylabel('Model', fontsize=10, fontweight='bold')
+        ax.tick_params(axis='x', rotation=45, labelsize=9)
+        ax.tick_params(axis='y', rotation=0, labelsize=9)
+
+    # Remove the empty subplot
+    axes[-1].remove()
+
+    plt.suptitle('Performance Heatmaps Overview', fontsize=16, fontweight='bold', y=0.98)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'performance_heatmaps_overview.png'),
+                dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+def _create_per_model_bar_charts(df, plots_dir):
+    """Create individual bar charts for each model showing MOTA, IDF1, and MOTP."""
+    print("Creating per-model bar charts...")
+
+    # Set style
+    plt.style.use('seaborn-v0_8')
+
+    # Get unique models
+    models = df['model'].unique()
+
+    for model in models:
+        model_data = df[df['model'] == model]
+
+        # Calculate average metrics per method
+        method_metrics = model_data.groupby('method').agg({
+            'MOTA': 'mean',
+            'IDF1': 'mean',
+            'MOTP': 'mean'
+        }).reset_index()
+
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Set up positions
+        methods = method_metrics['method'].tolist()
+        x_pos = np.arange(len(methods))
+        width = 0.25
+
+        # Create bars
+        bars1 = ax.bar(x_pos - width, method_metrics['MOTA'], width,
+                       label='MOTA', color='#2E86AB', alpha=0.8)
+        bars2 = ax.bar(x_pos, method_metrics['IDF1'], width,
+                       label='IDF1', color='#A23B72', alpha=0.8)
+        bars3 = ax.bar(x_pos + width, method_metrics['MOTP'], width,
+                       label='MOTP (lower is better)', color='#F18F01', alpha=0.8)
+
+        # Customize the plot
+        ax.set_xlabel('Methods', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Metric Value', fontsize=12, fontweight='bold')
+        ax.set_title(f'{model} - Performance Metrics by Method',
+                     fontsize=14, fontweight='bold', pad=20)
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(methods, rotation=45, ha='right')
+        ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Add value labels on bars
+        def add_value_labels(bars, values):
+            for bar, value in zip(bars, values):
+                height = bar.get_height()
+                ax.annotate(f'{value:.3f}',
+                            xy=(bar.get_x() + bar.get_width() / 2, height),
+                            xytext=(0, 3),
+                            textcoords="offset points",
+                            ha='center', va='bottom',
+                            fontsize=9, fontweight='bold')
+
+        add_value_labels(bars1, method_metrics['MOTA'])
+        add_value_labels(bars2, method_metrics['IDF1'])
+        add_value_labels(bars3, method_metrics['MOTP'])
+
+        # Set y-axis limits
+        ax.set_ylim(0, max(method_metrics[['MOTA', 'IDF1', 'MOTP']].max()) * 1.1)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f'{model}_bar_chart.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+
+
+def _create_per_model_radar_charts(df, plots_dir):
+    """Create radar charts for each model with normalized metrics."""
+    import math
+
+    print("Creating per-model radar charts...")
+
+    # Get unique models
+    models = df['model'].unique()
+
+    # Calculate overall statistics for normalization
+    overall_stats = {
+        'MOTA': {'min': df['MOTA'].min(), 'max': df['MOTA'].max()},
+        'IDF1': {'min': df['IDF1'].min(), 'max': df['IDF1'].max()},
+        'MOTP': {'min': df['MOTP'].min(), 'max': df['MOTP'].max()},
+        'Precision': {'min': df['Precision'].min(), 'max': df['Precision'].max()},
+        'Recall': {'min': df['Recall'].min(), 'max': df['Recall'].max()}
+    }
+
+    def normalize_metric(value, metric_name):
+        """Normalize metric to 0-1 range, with special handling for MOTP."""
+        min_val = overall_stats[metric_name]['min']
+        max_val = overall_stats[metric_name]['max']
+
+        if max_val == min_val:
+            return 0.5
+
+        normalized = (value - min_val) / (max_val - min_val)
+
+        # For MOTP, invert the scale (lower is better)
+        if metric_name == 'MOTP':
+            normalized = 1 - normalized
+
+        return normalized
+
+    for model in models:
+        model_data = df[df['model'] == model]
+
+        # Calculate average metrics per method
+        method_metrics = model_data.groupby('method').agg({
+            'MOTA': 'mean',
+            'IDF1': 'mean',
+            'MOTP': 'mean',
+            'Precision': 'mean',
+            'Recall': 'mean'
+        }).reset_index()
+
+        # Create radar chart
+        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+
+        # Define the metrics and their angles
+        metrics = ['MOTA', 'IDF1', 'MOTP\n(inverted)', 'Precision', 'Recall']
+        angles = [n / len(metrics) * 2 * math.pi for n in range(len(metrics))]
+        angles += angles[:1]  # Complete the circle
+
+        # Color palette for methods
+        colors = plt.cm.Set3(np.linspace(0, 1, len(method_metrics)))
+
+        for idx, (_, method_row) in enumerate(method_metrics.iterrows()):
+            # Normalize values
+            values = [
+                normalize_metric(method_row['MOTA'], 'MOTA'),
+                normalize_metric(method_row['IDF1'], 'IDF1'),
+                normalize_metric(method_row['MOTP'], 'MOTP'),
+                normalize_metric(method_row['Precision'], 'Precision'),
+                normalize_metric(method_row['Recall'], 'Recall')
+            ]
+            values += values[:1]  # Complete the circle
+
+            # Plot
+            ax.plot(angles, values, 'o-', linewidth=2, label=method_row['method'],
+                    color=colors[idx], markersize=6)
+            ax.fill(angles, values, alpha=0.25, color=colors[idx])
+
+        # Customize the plot
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(metrics, fontsize=11, fontweight='bold')
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=10)
+        ax.grid(True, alpha=0.3)
+
+        # Add title
+        plt.title(f'{model} - Normalized Performance Radar Chart',
+                  fontsize=14, fontweight='bold', pad=30)
+
+        # Add legend
+        plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0),
+                   frameon=True, fancybox=True, shadow=True)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(plots_dir, f'{model}_radar_chart.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+
+
+def _create_metric_distribution_boxplots(df, plots_dir):
+    """Create boxplots showing metric distributions by sequence."""
+    print("Creating metric distribution boxplots...")
+
+    # Create a comprehensive boxplot visualization
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+
+    metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
+
+    for i, metric in enumerate(metrics):
+        ax = axes[i]
+
+        # Create boxplot
+        box_data = []
+        labels = []
+
+        for sequence in sorted(df['sequence'].unique()):
+            seq_data = df[df['sequence'] == sequence][metric]
+            if len(seq_data) > 0:
+                box_data.append(seq_data)
+                labels.append(sequence)
+
+        if box_data:
+            bp = ax.boxplot(box_data, labels=labels, patch_artist=True)
+
+            # Color the boxes
+            colors = plt.cm.Set3(np.linspace(0, 1, len(box_data)))
+            for patch, color in zip(bp['boxes'], colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+
+        ax.set_title(f'{metric} Distribution by Sequence',
+                     fontsize=12, fontweight='bold')
+        ax.set_ylabel(metric, fontsize=11, fontweight='bold')
+        ax.tick_params(axis='x', rotation=45)
+        ax.grid(True, alpha=0.3)
+
+        # Special handling for MOTP (lower is better)
+        if metric == 'MOTP':
+            ax.set_title(f'{metric} Distribution by Sequence (lower is better)',
+                         fontsize=12, fontweight='bold')
+
+    # Remove the empty subplot
+    axes[-1].remove()
+
+    plt.suptitle('Metric Distributions Across Sequences',
+                 fontsize=16, fontweight='bold', y=0.98)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'metric_distributions_by_sequence.png'),
+                dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+def _create_sequence_difficulty_analysis(df, plots_dir):
+    """Create analysis showing which sequences are most challenging."""
+    print("Creating sequence difficulty analysis...")
+
+    # Calculate average performance per sequence
+    sequence_performance = df.groupby('sequence').agg({
+        'MOTA': 'mean',
+        'IDF1': 'mean',
+        'MOTP': 'mean',
+        'Precision': 'mean',
+        'Recall': 'mean'
+    }).reset_index()
+
+    # Sort by MOTA (ascending = more difficult)
+    sequence_performance = sequence_performance.sort_values('MOTA')
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    # Create horizontal bar chart
+    y_pos = np.arange(len(sequence_performance))
+
+    bars = ax.barh(y_pos, sequence_performance['MOTA'],
+                   color='#E74C3C', alpha=0.8, label='MOTA')
+
+    # Customize the plot
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(sequence_performance['sequence'])
+    ax.set_xlabel('Average MOTA Score', fontsize=12, fontweight='bold')
+    ax.set_title('Sequence Difficulty Analysis (sorted by MOTA)',
+                 fontsize=14, fontweight='bold', pad=20)
+    ax.grid(True, alpha=0.3, axis='x')
+
+    # Add value labels
+    for i, (bar, value) in enumerate(zip(bars, sequence_performance['MOTA'])):
+        ax.text(value + 0.01, bar.get_y() + bar.get_height() / 2,
+                f'{value:.3f}', va='center', fontsize=10, fontweight='bold')
+
+    # Add difficulty indicators
+    ax.axvline(x=sequence_performance['MOTA'].mean(), color='orange',
+               linestyle='--', alpha=0.8, label=f'Mean: {sequence_performance["MOTA"].mean():.3f}')
+
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, 'sequence_difficulty_analysis.png'),
+                dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+def create_comprehensive_visualizations(df, plots_dir):
+    """Create all visualization types."""
+    print("Creating comprehensive evaluation visualizations...")
+
+    # Ensure plots directory exists
+    os.makedirs(plots_dir, exist_ok=True)
+
+    # Create all visualization types
+    _create_per_model_bar_charts(df, plots_dir)
+    _create_per_model_radar_charts(df, plots_dir)
+    _create_metric_distribution_boxplots(df, plots_dir)
+    _create_sequence_difficulty_analysis(df, plots_dir)
+
+    print(f"All visualizations saved to: {plots_dir}")
+
+
+# Updated run_evaluation_v2 function with integrated enhanced visualizations
 def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluation_results.json",
-                   img_width: int = 450, img_height: int = 4002):
+                      img_width: int = 450, img_height: int = 4002):
+    """
+    Your complete evaluation function with enhanced visualizations integrated.
+    """
+    from collections import defaultdict
+    import json
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import os
+    import warnings
+    warnings.filterwarnings('ignore')
+
     all_results = {}
     all_metrics = defaultdict(list)
 
@@ -581,16 +977,6 @@ def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluat
     print(f"Total evaluations: {total_evaluations}")
     print(f"Successful: {successful_evaluations}")
     print(f"Failed: {failed_evaluations}")
-
-
-    # Print comprehensive summary
-    print(f"\n{'=' * 80}")
-    print("EVALUATION SUMMARY")
-    print(f"{'=' * 80}")
-    print(f"Results saved to: {output_file}")
-    print(f"Total evaluations: {total_evaluations}")
-    print(f"Successful: {successful_evaluations}")
-    print(f"Failed: {failed_evaluations}")
     print(f"Success rate: {successful_evaluations / total_evaluations * 100:.1f}%" if total_evaluations > 0 else "N/A")
 
     # Print overall metrics
@@ -651,7 +1037,6 @@ def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluat
               f"{combo[7]:<10}")
 
     report_path = "methods_performance_report.txt"
-
     with open(report_path, "w") as f:
         f.write(f"{'Model_Method':<{name_width}}"
                 f"{'MOTA':<{metric_width}}"
@@ -663,23 +1048,24 @@ def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluat
                 f"{'Frames':<10}\n")
         f.write("-" * (name_width + 5 * metric_width + 6 + 10) + "\n")
 
-    # CREATE VISUALIZATIONS
+    # CREATE ENHANCED VISUALIZATIONS
     if plot_data:
-        print("\nGenerating visualizations...")
+        print("\nGenerating enhanced visualizations...")
         df = pd.DataFrame(plot_data)
 
         plots_dir = os.path.join(os.path.dirname(output_file), 'plots')
         os.makedirs(plots_dir, exist_ok=True)
 
+        # Create all enhanced visualizations
         _create_performance_heatmap(df, plots_dir)
-        _create_model_metric_barplots(df, plots_dir)
+        _create_per_model_bar_charts(df, plots_dir)
+        _create_per_model_radar_charts(df, plots_dir)
+        _create_metric_distribution_boxplots(df, plots_dir)
         _create_sequence_difficulty_analysis(df, plots_dir)
 
-        print(f"Visualizations saved to: {plots_dir}")
+        print(f"Enhanced visualizations saved to: {plots_dir}")
 
     return final_results
-
-
 def _create_performance_heatmap(df, plots_dir):
     metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
     for metric in metrics:
