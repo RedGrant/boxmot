@@ -351,9 +351,8 @@ def create_frame_mapping(gt_files: List[str], pred_files: List[str]) -> Dict[str
     return frame_mappings
 
 
-def evaluate_sequence(pred_sequence_path: str, gt_sequence_path: str, img_size: Tuple[int, int] = (1920, 1080)) -> Dict[
+def evaluate_sequence(pred_sequence_path: str, gt_sequence_path: str, img_size: Tuple[int, int] = (450, 4002)) -> Dict[
     str, float]:
-    """Evaluate a single tracking sequence with improved filename matching"""
     evaluator = MOTEvaluator()
 
     pred_labels = os.path.join(pred_sequence_path, "labels")
@@ -474,7 +473,7 @@ def _create_performance_heatmap(df, plots_dir):
         plt.yticks(rotation=0)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'{metric}_heatmap.png'),
+        plt.savefig(os.path.join(plots_dir, f'{metric}_heatmap.eps'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -521,7 +520,7 @@ def _create_performance_heatmap(df, plots_dir):
 
     plt.suptitle('Performance Heatmaps Overview', fontsize=16, fontweight='bold', y=0.95)
     plt.subplots_adjust(wspace=1.5, hspace=1)  # adjust as needed
-    plt.savefig(os.path.join(plots_dir, 'performance_heatmaps_overview.png'),
+    plt.savefig(os.path.join(plots_dir, 'performance_heatmaps_overview.eps'),
                 dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -591,7 +590,7 @@ def _create_per_model_bar_charts(df, plots_dir):
         ax.set_ylim(0, max(method_metrics[['MOTA', 'IDF1', 'MOTP']].max()) * 1.1)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'{model}_bar_chart.png'),
+        plt.savefig(os.path.join(plots_dir, f'{model}_bar_chart.eps'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -686,7 +685,7 @@ def _create_per_model_radar_charts(df, plots_dir):
                    frameon=True, fancybox=True, shadow=True)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'{model}_radar_chart.png'),
+        plt.savefig(os.path.join(plots_dir, f'{model}_radar_chart.eps'),
                     dpi=300, bbox_inches='tight')
         plt.close()
 
@@ -726,7 +725,7 @@ def _create_metric_distribution_boxplots(df, plots_dir):
         ax.set_title(f'{metric} Distribution by Sequence',
                      fontsize=12, fontweight='bold')
         ax.set_ylabel(metric, fontsize=11, fontweight='bold')
-        ax.tick_params(axis='x', rotation=45)
+        ax.tick_params(axis='x', rotation=90)
         ax.grid(True, alpha=0.3)
 
         # Special handling for MOTP (lower is better)
@@ -740,59 +739,9 @@ def _create_metric_distribution_boxplots(df, plots_dir):
     plt.suptitle('Metric Distributions Across Sequences',
                  fontsize=16, fontweight='bold', y=0.98)
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'metric_distributions_by_sequence.png'),
+    plt.savefig(os.path.join(plots_dir, 'metric_distributions_by_sequence.eps'),
                 dpi=300, bbox_inches='tight')
     plt.close()
-
-
-def _create_sequence_difficulty_analysis(df, plots_dir):
-    """Create analysis showing which sequences are most challenging."""
-    print("Creating sequence difficulty analysis...")
-
-    # Calculate average performance per sequence
-    sequence_performance = df.groupby('sequence').agg({
-        'MOTA': 'mean',
-        'IDF1': 'mean',
-        'MOTP': 'mean',
-        'Precision': 'mean',
-        'Recall': 'mean'
-    }).reset_index()
-
-    # Sort by MOTA (ascending = more difficult)
-    sequence_performance = sequence_performance.sort_values('MOTA')
-
-    # Create the plot
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    # Create horizontal bar chart
-    y_pos = np.arange(len(sequence_performance))
-
-    bars = ax.barh(y_pos, sequence_performance['MOTA'],
-                   color='#E74C3C', alpha=0.8, label='MOTA')
-
-    # Customize the plot
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(sequence_performance['sequence'])
-    ax.set_xlabel('Average MOTA Score', fontsize=12, fontweight='bold')
-    ax.set_title('Sequence Difficulty Analysis (sorted by MOTA)',
-                 fontsize=14, fontweight='bold', pad=30)
-    ax.grid(True, alpha=0.3, axis='x')
-
-    # Add value labels
-    for i, (bar, value) in enumerate(zip(bars, sequence_performance['MOTA'])):
-        ax.text(value + 0.01, bar.get_y() + bar.get_height() / 2,
-                f'{value:.3f}', va='center', fontsize=10, fontweight='bold')
-
-    # Add difficulty indicators
-    ax.axvline(x=sequence_performance['MOTA'].mean(), color='orange',
-               linestyle='--', alpha=0.8, label=f'Mean: {sequence_performance["MOTA"].mean():.3f}')
-
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'sequence_difficulty_analysis.png'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-
 
 def _create_method_comparison_matrix(df, plots_dir):
     """Create a matrix showing method rankings across all models."""
@@ -833,149 +782,9 @@ def _create_method_comparison_matrix(df, plots_dir):
     plt.yticks(rotation=0)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'method_ranking_matrix.png'),
+    plt.savefig(os.path.join(plots_dir, 'method_ranking_matrix.eps'),
                 dpi=300, bbox_inches='tight')
     plt.close()
-
-
-def _create_model_stability_analysis(df, plots_dir):
-    """Analyze consistency of performance across sequences for each model."""
-    print("Creating model stability analysis...")
-
-    # Calculate coefficient of variation (CV) for each model-method combination
-    stability_data = []
-
-    for model in df['model'].unique():
-        for method in df[df['model'] == model]['method'].unique():
-            subset = df[(df['model'] == model) & (df['method'] == method)]
-
-            if len(subset) > 1:  # Need at least 2 sequences for CV calculation
-                for metric in ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']:
-                    mean_val = subset[metric].mean()
-                    std_val = subset[metric].std()
-                    cv = (std_val / mean_val) * 100 if mean_val != 0 else 0
-
-                    stability_data.append({
-                        'model': model,
-                        'method': method,
-                        'metric': metric,
-                        'mean': mean_val,
-                        'std': std_val,
-                        'cv': cv,
-                        'sequences': len(subset)
-                    })
-
-    if not stability_data:
-        print("Not enough data for stability analysis")
-        return
-
-    stability_df = pd.DataFrame(stability_data)
-
-    # Create CV heatmap
-    plt.figure(figsize=(14, 10))
-
-    # Pivot for heatmap
-    cv_pivot = stability_df.pivot_table(
-        values='cv',
-        index=['model', 'method'],
-        columns='metric',
-        aggfunc='mean'
-    )
-
-    sns.heatmap(cv_pivot, annot=True, fmt='.1f', cmap='RdYlGn_r',
-                center=cv_pivot.mean().mean(), linewidths=0.5,
-                cbar_kws={'label': 'Coefficient of Variation (%)'})
-
-    plt.title('Model-Method Stability Analysis\n(Lower CV = More Consistent)',
-              fontsize=14, fontweight='bold', pad=40)
-    plt.xlabel('Metrics', fontsize=12, fontweight='bold')
-    plt.ylabel('Model-Method', fontsize=12, fontweight='bold')
-    plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'stability_analysis.png'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def _create_performance_vs_complexity_scatter(df, plots_dir):
-    """Create scatter plots showing performance vs complexity trade-offs."""
-    print("Creating performance vs complexity analysis...")
-
-    # Calculate complexity proxy (frames processed per sequence)
-    complexity_data = df.groupby(['model', 'method']).agg({
-        'frames_processed': 'mean',
-        'MOTA': 'mean',
-        'IDF1': 'mean',
-        'MOTP': 'mean',
-        'Precision': 'mean',
-        'Recall': 'mean'
-    }).reset_index()
-
-    # Create scatter plots
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    axes = axes.flatten()
-
-    metrics = ['MOTA', 'IDF1', 'Precision', 'Recall']
-    colors = plt.cm.Set3(np.linspace(0, 1, len(complexity_data)))
-
-    for i, metric in enumerate(metrics):
-        ax = axes[i]
-
-        # Create scatter plot
-        scatter = ax.scatter(complexity_data['frames_processed'],
-                             complexity_data[metric],
-                             c=colors[:len(complexity_data)],
-                             s=100, alpha=0.7)
-
-        # Add labels for each point
-        for idx, row in complexity_data.iterrows():
-            ax.annotate(f"{row['model']}\n{row['method']}",
-                        (row['frames_processed'], row[metric]),
-                        xytext=(5, 5), textcoords='offset points',
-                        fontsize=8, ha='left', va='bottom')
-
-        ax.set_xlabel('Average Frames Processed', fontsize=11, fontweight='bold')
-        ax.set_ylabel(metric, fontsize=11, fontweight='bold')
-        ax.set_title(f'{metric} vs Processing Complexity', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-
-    plt.suptitle('Performance vs Complexity Trade-off Analysis',
-                 fontsize=16, fontweight='bold', y=0.98)
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'performance_vs_complexity.png'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def _create_correlation_matrix(df, plots_dir):
-    """Create correlation matrix between different metrics."""
-    print("Creating metric correlation matrix...")
-
-    # Calculate correlations
-    metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall', 'frames_processed']
-    corr_matrix = df[metrics].corr()
-
-    # Create the heatmap
-    plt.figure(figsize=(10, 8))
-
-    # Create mask for upper triangle
-    mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
-
-    sns.heatmap(corr_matrix, mask=mask, annot=True, fmt='.3f',
-                cmap='RdBu_r', center=0, square=True, linewidths=0.5,
-                cbar_kws={'label': 'Correlation Coefficient'})
-
-    plt.title('Metric Correlation Matrix', fontsize=14, fontweight='bold', pad=20)
-    plt.xticks(rotation=45, ha='right')
-    plt.yticks(rotation=0)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'metric_correlation_matrix.png'),
-                dpi=300, bbox_inches='tight')
-    plt.close()
-
 
 def _create_top_performers_summary(df, plots_dir):
     """Create a summary visualization of top performing combinations."""
@@ -1056,105 +865,9 @@ def _create_top_performers_summary(df, plots_dir):
     ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'top_performers_summary.png'),
+    plt.savefig(os.path.join(plots_dir, 'top_performers_summary.eps'),
                 dpi=300, bbox_inches='tight')
     plt.close()
-
-
-def _create_sequence_performance_heatmap(df, plots_dir):
-    """Create heatmap showing performance across sequences for each model-method."""
-    print("Creating sequence performance heatmap...")
-
-    # Create separate heatmaps for each metric
-    metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
-
-    for metric in metrics:
-        # Create pivot table with model-method as index and sequence as columns
-        df['model_method'] = df['model'] + '_' + df['method']
-        pivot_data = df.pivot_table(
-            values=metric,
-            index='model_method',
-            columns='sequence',
-            aggfunc='mean'
-        )
-
-        # Create the heatmap
-        plt.figure(figsize=(16, 10))
-
-        # Special handling for MOTP (lower is better)
-        if metric == 'MOTP':
-            cmap = 'RdYlGn'  # Red for high (bad), Green for low (good)
-            title = f'{metric} Performance Across Sequences (Lower is Better)'
-        else:
-            cmap = 'RdYlGn_r'  # Red for low (bad), Green for high (good)
-            title = f'{metric} Performance Across Sequences'
-
-        sns.heatmap(pivot_data, annot=True, fmt='.3f', cmap=cmap,
-                    center=pivot_data.mean().mean(), linewidths=0.5,
-                    cbar_kws={'label': metric})
-
-        plt.title(title, fontsize=14, fontweight='bold', pad=20)
-        plt.xlabel('Sequences', fontsize=12, fontweight='bold')
-        plt.ylabel('Model-Method', fontsize=12, fontweight='bold')
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'sequence_{metric}_heatmap.png'),
-                    dpi=300, bbox_inches='tight')
-        plt.close()
-
-
-def _create_statistical_significance_tests(df, plots_dir):
-    """Create statistical significance analysis between methods."""
-    print("Creating statistical significance analysis...")
-
-    from scipy import stats
-
-    # Get unique methods
-    methods = df['method'].unique()
-
-    # Perform pairwise t-tests for each metric
-    metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
-
-    for metric in metrics:
-        # Create p-value matrix
-        n_methods = len(methods)
-        p_values = np.ones((n_methods, n_methods))
-
-        for i, method1 in enumerate(methods):
-            for j, method2 in enumerate(methods):
-                if i != j:
-                    data1 = df[df['method'] == method1][metric]
-                    data2 = df[df['method'] == method2][metric]
-
-                    if len(data1) > 1 and len(data2) > 1:
-                        _, p_val = stats.ttest_ind(data1, data2)
-                        p_values[i, j] = p_val
-
-        # Create heatmap of p-values
-        plt.figure(figsize=(10, 8))
-
-        # Create mask for diagonal
-        mask = np.eye(n_methods, dtype=bool)
-
-        sns.heatmap(p_values, mask=mask, annot=True, fmt='.3f',
-                    cmap='RdYlGn', center=0.05, square=True, linewidths=0.5,
-                    xticklabels=methods, yticklabels=methods,
-                    cbar_kws={'label': 'p-value'})
-
-        plt.title(f'Statistical Significance (p-values) - {metric}\n(Green < 0.05 = Significant)',
-                  fontsize=14, fontweight='bold', pad=20)
-        plt.xlabel('Method', fontsize=12, fontweight='bold')
-        plt.ylabel('Method', fontsize=12, fontweight='bold')
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-
-        plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'significance_{metric}.png'),
-                    dpi=300, bbox_inches='tight')
-        plt.close()
-
 
 def create_comprehensive_visualizations(df, plots_dir):
     """Create all visualization types including new enhanced ones."""
@@ -1163,21 +876,15 @@ def create_comprehensive_visualizations(df, plots_dir):
     # Ensure plots directory exists
     os.makedirs(plots_dir, exist_ok=True)
 
-    # Original visualizations
+     #Original visualizations
     _create_performance_heatmap(df, plots_dir)
     _create_per_model_bar_charts(df, plots_dir)
     _create_per_model_radar_charts(df, plots_dir)
     _create_metric_distribution_boxplots(df, plots_dir)
-    _create_sequence_difficulty_analysis(df, plots_dir)
 
     # New enhanced visualizations
     _create_method_comparison_matrix(df, plots_dir)
-    _create_model_stability_analysis(df, plots_dir)
-    _create_performance_vs_complexity_scatter(df, plots_dir)
-    _create_correlation_matrix(df, plots_dir)
     _create_top_performers_summary(df, plots_dir)
-    _create_sequence_performance_heatmap(df, plots_dir)
-    _create_statistical_significance_tests(df, plots_dir)
 
     print(f"All enhanced visualizations saved to: {plots_dir}")
 
@@ -1203,12 +910,9 @@ def _create_visualization_summary_report(plots_dir):
             ("Metric Distribution Boxplots", "Distribution analysis by sequence"),
             ("Sequence Difficulty Analysis", "MOTA-based sequence difficulty ranking"),
             ("Method Comparison Matrix", "Method ranking across all metrics"),
-            ("Model Stability Analysis", "Consistency analysis using coefficient of variation"),
             ("Performance vs Complexity", "Scatter plots showing trade-offs"),
-            ("Metric Correlation Matrix", "Correlation between different metrics"),
             ("Top Performers Summary", "Composite score ranking and detailed breakdown"),
-            ("Sequence Performance Heatmaps", "Performance across sequences for each metric"),
-            ("Statistical Significance Tests", "p-value matrices for method comparisons")
+            ("Sequence Performance Heatmaps", "Performance across sequences for each metric")
         ]
 
         for name, description in visualizations:
@@ -1219,10 +923,8 @@ def _create_visualization_summary_report(plots_dir):
         f.write("-" * 30 + "\n")
         f.write("• MOTP heatmaps: Green = better (lower values)\n")
         f.write("• Other metrics: Green = better (higher values)\n")
-        f.write("• Stability analysis: Lower CV = more consistent performance\n")
-        f.write("• Correlation matrix: Identify relationships between metrics\n")
         f.write("• Top performers: Composite score balances all metrics\n")
-        f.write("• Statistical significance: p < 0.05 indicates significant differences\n")
+
 
     print(f"Visualization summary report saved to: {report_path}")
 
@@ -1472,12 +1174,7 @@ def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluat
         plots_dir = os.path.join(os.path.dirname(output_file), 'plots')
         os.makedirs(plots_dir, exist_ok=True)
 
-        # Create all enhanced visualizations
-        _create_performance_heatmap(df, plots_dir)
-        _create_per_model_bar_charts(df, plots_dir)
-        _create_per_model_radar_charts(df, plots_dir)
-        _create_metric_distribution_boxplots(df, plots_dir)
-        _create_sequence_difficulty_analysis(df, plots_dir)
+        create_comprehensive_visualizations(df, plots_dir)
 
         print(f"Enhanced visualizations saved to: {plots_dir}")
 
