@@ -596,98 +596,74 @@ def _create_per_model_bar_charts(df, plots_dir):
 
 
 def _create_per_model_radar_charts(df, plots_dir):
-    """Create radar charts for each model with normalized metrics."""
-    import math
-
+    """Create radar charts per model with reduced visual overlap."""
     print("Creating per-model radar charts...")
 
-    # Get unique models
-    models = df['model'].unique()
+    # Define metrics
+    raw_metrics = ['MOTA', 'IDF1', 'MOTP', 'Precision', 'Recall']
+    radar_labels = ['MOTA', 'IDF1', 'MOTP\n(inverted)', 'Precision', 'Recall']
 
-    # Calculate overall statistics for normalization
+    # Compute normalization ranges
     overall_stats = {
-        'MOTA': {'min': df['MOTA'].min(), 'max': df['MOTA'].max()},
-        'IDF1': {'min': df['IDF1'].min(), 'max': df['IDF1'].max()},
-        'MOTP': {'min': df['MOTP'].min(), 'max': df['MOTP'].max()},
-        'Precision': {'min': df['Precision'].min(), 'max': df['Precision'].max()},
-        'Recall': {'min': df['Recall'].min(), 'max': df['Recall'].max()}
+        metric: {'min': df[metric].min(), 'max': df[metric].max()}
+        for metric in raw_metrics
     }
 
-    def normalize_metric(value, metric_name):
-        """Normalize metric to 0-1 range, with special handling for MOTP."""
-        min_val = overall_stats[metric_name]['min']
-        max_val = overall_stats[metric_name]['max']
-
+    def normalize_metric(value, metric):
+        min_val = overall_stats[metric]['min']
+        max_val = overall_stats[metric]['max']
         if max_val == min_val:
             return 0.5
+        norm = (value - min_val) / (max_val - min_val)
+        return 1 - norm if metric == 'MOTP' else norm
 
-        normalized = (value - min_val) / (max_val - min_val)
-
-        # For MOTP, invert the scale (lower is better)
-        if metric_name == 'MOTP':
-            normalized = 1 - normalized
-
-        return normalized
-
-    for model in models:
+    # Loop through models
+    for model in df['model'].unique():
         model_data = df[df['model'] == model]
 
-        # Calculate average metrics per method
-        method_metrics = model_data.groupby('method').agg({
-            'MOTA': 'mean',
-            'IDF1': 'mean',
-            'MOTP': 'mean',
-            'Precision': 'mean',
-            'Recall': 'mean'
-        }).reset_index()
+        # Mean per method
+        method_metrics = model_data.groupby('method').agg({m: 'mean' for m in raw_metrics}).reset_index()
 
-        # Create radar chart
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+        # Sort methods so best ones are plotted last (on top)
+        method_metrics = method_metrics.sort_values(by='MOTA')
 
-        # Define the metrics and their angles
-        metrics = ['MOTA', 'IDF1', 'MOTP\n(inverted)', 'Precision', 'Recall']
-        angles = [n / len(metrics) * 2 * math.pi for n in range(len(metrics))]
-        angles += angles[:1]  # Complete the circle
+        fig, ax = plt.subplots(figsize=(9, 9), subplot_kw=dict(projection='polar'))
 
-        # Color palette for methods
-        colors = plt.cm.Set3(np.linspace(0, 1, len(method_metrics)))
+        angles = [n / len(raw_metrics) * 2 * pi for n in range(len(raw_metrics))]
+        angles += angles[:1]
 
-        for idx, (_, method_row) in enumerate(method_metrics.iterrows()):
-            # Normalize values
-            values = [
-                normalize_metric(method_row['MOTA'], 'MOTA'),
-                normalize_metric(method_row['IDF1'], 'IDF1'),
-                normalize_metric(method_row['MOTP'], 'MOTP'),
-                normalize_metric(method_row['Precision'], 'Precision'),
-                normalize_metric(method_row['Recall'], 'Recall')
-            ]
-            values += values[:1]  # Complete the circle
+        num_methods = len(method_metrics)
+        colors = sns.color_palette("pastel", num_methods)
 
-            # Plot
-            ax.plot(angles, values, 'o-', linewidth=2, label=method_row['method'],
-                    color=colors[idx], markersize=6)
-            ax.fill(angles, values, alpha=0.25, color=colors[idx])
+        for idx, row in method_metrics.iterrows():
+            # Normalized radar values
+            values = [normalize_metric(row[m], m) for m in raw_metrics]
+            values += values[:1]
 
-        # Customize the plot
+            color = colors[idx]
+            label = row['method']
+
+            # Line only, no fill (or very transparent)
+            ax.plot(angles, values, color=color, linewidth=0.8, linestyle='-', label=label, marker='o', markersize=3)
+
+        # Axis setup
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(metrics, fontsize=11, fontweight='bold')
+        ax.set_xticklabels(radar_labels, fontsize=11, fontweight='bold')
         ax.set_ylim(0, 1)
         ax.set_yticks([0.2, 0.4, 0.6, 0.8, 1.0])
-        ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=10)
-        ax.grid(True, alpha=0.3)
+        ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=9)
+        ax.grid(True, alpha=0.2)
 
-        # Add title
-        plt.title(f'{model} - Normalized Performance Radar Chart',
-                  fontsize=14, fontweight='bold', pad=30)
+        # Title and legend
+        ax.set_title(f'{model} - Normalized Radar Chart', fontsize=14, fontweight='bold', pad=20)
+        ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.0), fontsize=9, frameon=False)
 
-        # Add legend
-        plt.legend(loc='upper right', bbox_to_anchor=(1.3, 1.0),
-                   frameon=True, fancybox=True, shadow=True)
-
+        # Save chart
+        os.makedirs(plots_dir, exist_ok=True)
         plt.tight_layout()
-        plt.savefig(os.path.join(plots_dir, f'{model}_radar_chart.eps'),
-                    dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(plots_dir, f'{model}_radar_chart.eps'), dpi=300, bbox_inches='tight')
         plt.close()
+
 
 
 def _create_metric_distribution_boxplots(df, plots_dir):
