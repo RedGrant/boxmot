@@ -762,7 +762,7 @@ def _create_method_comparison_matrix(df, plots_dir):
                 dpi=300, bbox_inches='tight')
     plt.close()
 
-def _create_top_performers_summary(df, plots_dir):
+def _create_top_performers_summary(df, plots_dir, save_format='png'):
     """Create a summary visualization of top performing combinations."""
     print("Creating top performers summary...")
 
@@ -776,8 +776,10 @@ def _create_top_performers_summary(df, plots_dir):
         'frames_processed': 'mean'
     }).reset_index()
 
-    # Create composite score (MOTP inverted since lower is better)
-    df_summary['MOTP_inverted'] = 1 - df_summary['MOTP']  # Invert MOTP
+    # Invert MOTP
+    df_summary['MOTP_inverted'] = 1 - df_summary['MOTP']
+
+    # Composite score
     df_summary['composite_score'] = (
             df_summary['MOTA'] * 0.3 +
             df_summary['IDF1'] * 0.25 +
@@ -786,64 +788,71 @@ def _create_top_performers_summary(df, plots_dir):
             df_summary['Recall'] * 0.125
     )
 
-    # Sort by composite score
-    df_summary = df_summary.sort_values('composite_score', ascending=False)
+    # Sort by score and get top 10
+    top_10 = df_summary.sort_values('composite_score', ascending=False).head(10)
+    top_5 = top_10.head(5)
 
-    # Take top 10
-    top_10 = df_summary.head(10)
-
-    # Create visualization
+    # --- Plotting ---
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
 
-    # Left plot: Composite scores
-    bars = ax1.barh(range(len(top_10)), top_10['composite_score'],
-                    color=plt.cm.RdYlGn(np.linspace(0.3, 0.9, len(top_10))))
+    # --- Left: Composite scores ---
+    bars = ax1.barh(
+        range(len(top_10)),
+        top_10['composite_score'],
+        color=plt.cm.RdYlGn(np.linspace(0.3, 0.9, len(top_10))),
+        edgecolor='black'
+    )
 
     ax1.set_yticks(range(len(top_10)))
-    ax1.set_yticklabels([f"{row['model']}\n{row['method']}"
-                         for _, row in top_10.iterrows()])
+    ax1.set_yticklabels([f"{row['model']}\n{row['method']}" for _, row in top_10.iterrows()])
     ax1.set_xlabel('Composite Score', fontsize=12, fontweight='bold')
     ax1.set_title('Top 10 Model-Method Combinations\n(by Composite Score)',
                   fontsize=14, fontweight='bold')
     ax1.grid(True, alpha=0.3, axis='x')
 
-    # Add value labels
     for i, (bar, value) in enumerate(zip(bars, top_10['composite_score'])):
-        ax1.text(value + 0.01, bar.get_y() + bar.get_height() / 2,
+        ax1.text(value + 0.005, bar.get_y() + bar.get_height() / 2,
                  f'{value:.3f}', va='center', fontsize=10, fontweight='bold')
 
-    # Right plot: Detailed metrics for top 5
-    top_5 = top_10.head(5)
-
-    # Prepare data for stacked bar chart
-    metrics_data = top_5[['MOTA', 'IDF1', 'MOTP_inverted', 'Precision', 'Recall']].values
-
-    # Create stacked bar chart
-    x = np.arange(len(top_5))
-    width = 0.6
-
-    bottom = np.zeros(len(top_5))
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7']
+    # --- Right: Grouped Bar Chart ---
+    metrics = ['MOTA', 'IDF1', 'MOTP_inverted', 'Precision', 'Recall']
     labels = ['MOTA', 'IDF1', 'MOTP (inv)', 'Precision', 'Recall']
+    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7']
 
-    for i, (metric, color, label) in enumerate(zip(metrics_data.T, colors, labels)):
-        ax2.bar(x, metric, width, bottom=bottom, label=label, color=color, alpha=0.8)
-        bottom += metric
+    x = np.arange(len(top_5))  # Number of groups
+    bar_width = 0.15
 
-    ax2.set_xlabel('Top 5 Combinations', fontsize=12, fontweight='bold')
+    for i, metric in enumerate(metrics):
+        ax2.bar(
+            x + i * bar_width,
+            top_5[metric],
+            width=bar_width,
+            label=labels[i],
+            color=colors[i],
+            edgecolor='black'
+        )
+
+    ax2.set_xticks(x + bar_width * (len(metrics) - 1) / 2)
+    ax2.set_xticklabels([f"{row['model']}\n{row['method']}" for _, row in top_5.iterrows()],
+                        rotation=45, ha='right')
+
+    ax2.set_ylim(0, 1.1)
     ax2.set_ylabel('Normalized Metric Values', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Top 5 Combinations', fontsize=12, fontweight='bold')
     ax2.set_title('Detailed Metrics Breakdown\n(Top 5 Combinations)',
                   fontsize=14, fontweight='bold')
-    ax2.set_xticks(x)
-    ax2.set_xticklabels([f"{row['model']}\n{row['method']}"
-                         for _, row in top_5.iterrows()], rotation=45, ha='right')
-    ax2.legend(loc='upper right')
     ax2.grid(True, alpha=0.3, axis='y')
 
+    # Move legend outside
+    ax2.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+
     plt.tight_layout()
-    plt.savefig(os.path.join(plots_dir, 'top_performers_summary.eps'),
-                dpi=300, bbox_inches='tight')
+
+    # Save
+    out_path = os.path.join(plots_dir, f'top_performers_summary.{save_format}')
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
+
 
 def create_comprehensive_visualizations(df, plots_dir):
     """Create all visualization types including new enhanced ones."""
