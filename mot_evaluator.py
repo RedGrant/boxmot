@@ -762,7 +762,7 @@ def _create_method_comparison_matrix(df, plots_dir):
                 dpi=300, bbox_inches='tight')
     plt.close()
 
-def _create_top_performers_summary(df, plots_dir, save_format='png'):
+def _create_top_performers_summary(df, plots_dir, save_format='eps'):
     """Create a summary visualization of top performing combinations."""
     print("Creating top performers summary...")
 
