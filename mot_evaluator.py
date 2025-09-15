@@ -190,13 +190,32 @@ class MOTEvaluator:
 
         for gt_id in self.gt_ids:
             total_frames = sum(1 for frame_id in frame_ids if gt_id in self.frames[frame_id]['gt'])
-            matched_frames = sum(1 for frame_id in frame_ids
-                                 if gt_id in self.frames[frame_id]['gt']
-                                 and any(gt_ids[i] == gt_id for i, _, _ in self.hungarian_assignment(
-                np.array([[self.compute_iou(self.frames[frame_id]['gt'][gt_id],
-                                            self.frames[frame_id]['pred'][pred_id])]
-                          for pred_id in self.frames[frame_id]['pred'].keys()])
-            )))
+            matched_frames = 0
+
+            for frame_id in frame_ids:
+                if gt_id not in self.frames[frame_id]['gt']:
+                    continue
+                if not self.frames[frame_id]['pred']:  # no predictions → skip Hungarian
+                    continue
+
+                gt_boxes = self.frames[frame_id]['gt']
+                pred_boxes = self.frames[frame_id]['pred']
+                gt_ids = list(gt_boxes.keys())  # 🔑 rebuilt here
+                pred_ids = list(pred_boxes.keys())
+
+                cost_matrix = np.zeros((len(gt_ids), len(pred_ids)))
+                for i, gid in enumerate(gt_ids):
+                    for j, pid in enumerate(pred_ids):
+                        cost_matrix[i, j] = self.compute_iou(gt_boxes[gid], pred_boxes[pid])
+
+                if cost_matrix.size == 0:
+                    continue
+
+                assignments = self.hungarian_assignment(cost_matrix)
+
+                # Check if *this* gt_id was matched
+                if any(0 <= i < len(gt_ids) and gt_ids[i] == gt_id for i, _, _ in assignments):
+                    matched_frames += 1
 
             if total_frames == 0:
                 continue
@@ -359,8 +378,8 @@ def evaluate_sequence(pred_sequence_path: str, gt_sequence_path: str, img_size: 
 
     # Ground truth labels are directly in the gt_sequence_path
     gt_labels = gt_sequence_path
-    if os.path.exists(os.path.join(gt_sequence_path, "labels")):
-        gt_labels = os.path.join(gt_sequence_path, "labels")
+    #if os.path.exists(os.path.join(gt_sequence_path, "labels")):
+    #    gt_labels = os.path.join(gt_sequence_path, "labels")
 
     if not os.path.exists(pred_labels):
         return {"error": f"Prediction labels directory not found: {pred_labels}"}
@@ -427,6 +446,350 @@ def find_ground_truth_sequence(gt_base_dir: str, sequence_name: str) -> Optional
                 return gt_path
 
     return None
+
+
+
+
+def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluation_results.json",
+                      img_width: int = 450, img_height: int = 4002):
+    """
+    Complete evaluation function with enhanced visualizations integrated.
+    Skips Fish_cage_950, Fish_cage_1200, Fish_cage_1400 by default.
+    """
+    from collections import defaultdict
+    import json
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import os
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    # --- Helpers ---
+    class _NumpyEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, (np.integer,)):
+                return int(obj)
+            if isinstance(obj, (np.floating,)):
+                return float(obj)
+            if isinstance(obj, (np.ndarray,)):
+                return obj.tolist()
+            return super().default(obj)
+
+    all_results = {}
+    all_metrics = defaultdict(list)
+
+    # For plotting - collect data as we go
+    plot_data = []
+
+    # Track statistics
+    total_evaluations = 0
+    successful_evaluations = 0
+    failed_evaluations = 0
+
+    # Sequences to ignore (hard-coded as requested)
+    ignore_sequences = {"Fish_cage_950", "Fish_cage_1200", "Fish_cage_1400"}
+    skipped_sequences = []
+
+    print(f"Evaluating results from: {results_dir}")
+    print(f"Ground truth from: {gt_dir}")
+    print(f"Image size: {img_width}x{img_height}")
+
+    # Basic sanity checks
+    if not os.path.isdir(results_dir):
+        raise ValueError(f"results_dir does not exist or is not a directory: {results_dir}")
+    if not os.path.isdir(gt_dir):
+        raise ValueError(f"gt_dir does not exist or is not a directory: {gt_dir}")
+
+    # Walk through results directory structure: model/method/sequence
+    for model_name in sorted(os.listdir(results_dir)):
+        model_path = os.path.join(results_dir, model_name)
+        if not os.path.isdir(model_path):
+            continue
+
+        print(f"\n{'=' * 60}")
+        print(f"Model: {model_name}")
+        print(f"{'=' * 60}")
+        all_results[model_name] = {}
+
+        for method_name in sorted(os.listdir(model_path)):
+            method_path = os.path.join(model_path, method_name)
+            if not os.path.isdir(method_path):
+                continue
+
+            print(f"\n  Method: {method_name}")
+            print(f"  {'-' * 50}")
+            all_results[model_name][method_name] = {}
+
+            for sequence_name in sorted(os.listdir(method_path)):
+                sequence_path = os.path.join(method_path, sequence_name)
+                if not os.path.isdir(sequence_path):
+                    continue
+
+                # Skip ignored sequences
+                if sequence_name in ignore_sequences:
+                    print(f"    {sequence_name:<30} - Skipped (ignored)")
+                    skipped_sequences.append({
+                        "model": model_name,
+                        "method": method_name,
+                        "sequence": sequence_name
+                    })
+                    continue
+
+
+
+                # Find matching ground truth sequence
+                # NOTE: expects find_ground_truth_sequence to be defined elsewhere
+                gt_sequence_path = find_ground_truth_sequence(gt_dir, sequence_name)
+
+                if not gt_sequence_path:
+                    print(f"    {sequence_name:<30} - Warning: No GT found")
+                    all_results[model_name][method_name][sequence_name] = {"error": "No ground truth found"}
+                    failed_evaluations += 1
+                    continue
+
+                total_evaluations += 1
+                print(f"    {sequence_name:<30} - ", end="")
+
+                try:
+                    if (
+                            method_name == "botsort" and
+                            model_name == "medium_binary_250_closing_KNN_1400" and
+                            sequence_name == "Wooden_deck_1400"
+                    ):
+                        print("\n*** DEBUG TRIGGERED ***")
+                        print(f"Model: {model_name}, Method: {method_name}, Sequence: {sequence_name}")
+                        print(f"Sequence path: {sequence_path}")
+
+                    # NOTE: expects evaluate_sequence to be defined elsewhere
+                    metrics = evaluate_sequence(sequence_path, gt_sequence_path, (img_width, img_height))
+
+                    if not isinstance(metrics, dict):
+                        raise ValueError("evaluate_sequence must return a dict with metrics")
+
+                    if "error" in metrics:
+                        print(f"Error: {metrics['error']}")
+                        failed_evaluations += 1
+                        all_results[model_name][method_name][sequence_name] = metrics
+                    else:
+                        all_results[model_name][method_name][sequence_name] = metrics
+                        successful_evaluations += 1
+
+                        # Collect for plotting
+                        plot_data.append({
+                            'model': model_name,
+                            'method': method_name,
+                            'sequence': sequence_name,
+                            'MOTA': float(metrics.get('MOTA', 0.0)),
+                            'IDF1': float(metrics.get('IDF1', 0.0)),
+                            'MOTP': float(metrics.get('MOTP', 0.0)),
+                            'Precision': float(metrics.get('Precision', 0.0)),
+                            'Recall': float(metrics.get('Recall', 0.0)),
+                            'frames_processed': int(metrics.get('frames_processed', 0))
+                        })
+
+                        # Collect metrics for summary (only numeric)
+                        for metric_name, value in metrics.items():
+                            if isinstance(value, (int, float, np.integer, np.floating)):
+                                if metric_name not in ['error', 'frames_processed']:
+                                    all_metrics[f"{model_name}_{method_name}_{metric_name}"].append(float(value))
+                                    all_metrics[f"overall_{metric_name}"].append(float(value))
+
+                        print(f"MOTA: {metrics.get('MOTA', 0):.3f}, "
+                              f"IDF1: {metrics.get('IDF1', 0):.3f}, "
+                              f"MOTP: {metrics.get('MOTP', 0):.3f}, "
+                              f"Frames: {metrics.get('frames_processed', 0)}")
+
+                except Exception as e:
+                    print(f"Error: {str(e)}")
+                    all_results[model_name][method_name][sequence_name] = {"error": str(e)}
+                    failed_evaluations += 1
+
+    # Compute summary statistics
+    summary_stats = {}
+    for metric_name, values in all_metrics.items():
+        # Guard against empty lists
+        if values:
+            vals = np.array(values, dtype=float)
+            summary_stats[metric_name] = {
+                'mean': float(np.mean(vals)),
+                'std': float(np.std(vals)),
+                'min': float(np.min(vals)),
+                'max': float(np.max(vals)),
+                'median': float(np.median(vals)),
+                'count': int(len(vals))
+            }
+
+    # Create performance summary by model and method
+    model_method_summary = {}
+    for model_name in all_results:
+        model_method_summary[model_name] = {}
+        for method_name in all_results[model_name]:
+            entries = list(all_results[model_name][method_name].values())
+            valid_results = [res for res in all_results[model_name][method_name].values()
+                             if isinstance(res, dict) and 'error' not in res]
+
+            if valid_results:
+                model_method_summary[model_name][method_name] = {
+                    'count': len(valid_results),
+                    'total_frames': int(sum(r.get('frames_processed', 0) for r in valid_results)),
+                    'avg_MOTA': float(np.mean([r.get('MOTA', 0.0) for r in valid_results])),
+                    'avg_IDF1': float(np.mean([r.get('IDF1', 0.0) for r in valid_results])),
+                    'avg_MOTP': float(np.mean([r.get('MOTP', 0.0) for r in valid_results])),
+                    'avg_Precision': float(np.mean([r.get('Precision', 0.0) for r in valid_results])),
+                    'avg_Recall': float(np.mean([r.get('Recall', 0.0) for r in valid_results])),
+                    'avg_ids': float(np.mean([r.get('ID_Switches', 0.0) for r in valid_results])),
+                }
+            else:
+                # No valid results — safely skip or set zeros
+                model_method_summary[model_name][method_name] = {
+                    'count': 0,
+                    'total_frames': 0,
+                    'avg_MOTA': 0.0,
+                    'avg_IDF1': 0.0,
+                    'avg_MOTP': 0.0,
+                    'avg_Precision': 0.0,
+                    'avg_Recall': 0.0,
+                    'avg_ids': 0.0
+                }
+
+    # Save results
+    final_results = {
+        'detailed_results': all_results,
+        'summary_statistics': summary_stats,
+        'model_method_summary': model_method_summary,
+        'evaluation_info': {
+            'total_evaluations': int(total_evaluations),
+            'successful_evaluations': int(successful_evaluations),
+            'failed_evaluations': int(failed_evaluations),
+            'success_rate': float(successful_evaluations / total_evaluations) if total_evaluations > 0 else 0.0,
+            'image_size': [int(img_width), int(img_height)],
+            'results_directory': results_dir,
+            'ground_truth_directory': gt_dir,
+            'skipped_sequences': skipped_sequences,
+            'skipped_count': len(skipped_sequences)
+        }
+    }
+
+    # Write JSON (safe for numpy types)
+    with open(output_file, 'w') as f:
+        json.dump(final_results, f, indent=2, cls=_NumpyEncoder)
+
+    # Print comprehensive summary
+    print(f"\n{'=' * 80}")
+    print("EVALUATION SUMMARY")
+    print(f"{'=' * 80}")
+    print(f"Results saved to: {output_file}")
+    print(f"Total evaluations: {total_evaluations}")
+    print(f"Successful: {successful_evaluations}")
+    print(f"Failed: {failed_evaluations}")
+    if total_evaluations > 0:
+        print(f"Success rate: {successful_evaluations / total_evaluations * 100:.1f}%")
+    else:
+        print("Success rate: N/A (no evaluations)")
+
+    # Print overall metrics
+    print(f"\n{'Overall Performance Metrics':<40}")
+    print(f"{'-' * 60}")
+    key_metrics = ['overall_MOTA', 'overall_IDF1', 'overall_MOTP', 'overall_Precision', 'overall_Recall']
+    for metric in key_metrics:
+        if metric in summary_stats:
+            stats = summary_stats[metric]
+            metric_name = metric.replace('overall_', '')
+            print(f"{metric_name:<15}: {stats['mean']:.3f} ± {stats['std']:.3f} "
+                  f"(min: {stats['min']:.3f}, max: {stats['max']:.3f}, n={stats['count']})")
+
+    # Print top performing combinations (extended metrics)
+    print(f"\n{'Top Performing Model-Method Combinations (by MOTA)':<100}")
+    print(f"{'-' * 120}")
+
+    # Collect all combinations
+    all_combinations = []
+    for model in model_method_summary:
+        for method in model_method_summary[model]:
+            combo_data = model_method_summary[model][method]
+            all_combinations.append((
+                f"{model}_{method}",
+                float(combo_data.get('avg_MOTA', 0.0)),
+                float(combo_data.get('avg_IDF1', 0.0)),
+                float(combo_data.get('avg_MOTP', 0.0)),
+                float(combo_data.get('avg_Precision', 0.0)),
+                float(combo_data.get('avg_Recall', 0.0)),
+                int(combo_data.get('count', 0)),
+                int(combo_data.get('total_frames', 0))
+            ))
+
+    # Define column widths
+    name_width = 65
+    metric_width = 10
+
+    # Print header
+    print(f"\n{'Model_Method':<{name_width}}"
+          f"{'MOTA':<{metric_width}}"
+          f"{'IDF1':<{metric_width}}"
+          f"{'MOTP':<{metric_width}}"
+          f"{'Precision':<{metric_width}}"
+          f"{'Recall':<{metric_width}}"
+          f"{'Seqs':<6}"
+          f"{'Frames':<10}")
+    print("-" * (name_width + 5 * metric_width + 6 + 10))
+
+    # Print all combinations
+    for combo in all_combinations:
+        print(f"{combo[0]:<{name_width}}"
+              f"{combo[1]:<{metric_width}.3f}"
+              f"{combo[2]:<{metric_width}.3f}"
+              f"{combo[3]:<{metric_width}.3f}"
+              f"{combo[4]:<{metric_width}.3f}"
+              f"{combo[5]:<{metric_width}.3f}"
+              f"{combo[6]:<6}"
+              f"{combo[7]:<10}")
+
+    # Write text report
+    report_path = "methods_performance_report.txt"
+    with open(report_path, "w") as f:
+        f.write(f"{'Model_Method':<{name_width}}"
+                f"{'MOTA':<{metric_width}}"
+                f"{'IDF1':<{metric_width}}"
+                f"{'MOTP':<{metric_width}}"
+                f"{'Precision':<{metric_width}}"
+                f"{'Recall':<{metric_width}}"
+                f"{'Seqs':<6}"
+                f"{'Frames':<10}\n")
+        f.write("-" * (name_width + 5 * metric_width + 6 + 10) + "\n")
+        for combo in all_combinations:
+            f.write(f"{combo[0]:<{name_width}}"
+                    f"{combo[1]:<{metric_width}.3f}"
+                    f"{combo[2]:<{metric_width}.3f}"
+                    f"{combo[3]:<{metric_width}.3f}"
+                    f"{combo[4]:<{metric_width}.3f}"
+                    f"{combo[5]:<{metric_width}.3f}"
+                    f"{combo[6]:<6}"
+                    f"{combo[7]:<10}\n")
+
+    # CREATE ENHANCED VISUALIZATIONS (if plot_data exists)
+    if plot_data:
+        print("\nGenerating enhanced visualizations...")
+        df = pd.DataFrame(plot_data)
+
+        base_dir = os.path.dirname(output_file) or "."
+        plots_dir = os.path.join(base_dir, 'plots')
+        os.makedirs(plots_dir, exist_ok=True)
+
+        # Call user-provided visualization function if exists; protect with try/except
+        try:
+            # create_comprehensive_visualizations should be implemented elsewhere
+            create_comprehensive_visualizations(df, plots_dir)
+            print(f"Enhanced visualizations saved to: {plots_dir}")
+        except NameError:
+            print("create_comprehensive_visualizations() not found — skipping visualization creation.")
+        except Exception as e:
+            print(f"Error while creating visualizations: {e}")
+
+    return final_results
+
+
 
 
 def _create_performance_heatmap(df, plots_dir):
@@ -876,7 +1239,6 @@ def create_comprehensive_visualizations(df, plots_dir):
     # Create a summary report
     _create_visualization_summary_report(plots_dir)
 
-
 def _create_visualization_summary_report(plots_dir):
     """Create a summary report of all generated visualizations."""
     report_path = os.path.join(plots_dir, 'visualization_summary.txt')
@@ -913,258 +1275,6 @@ def _create_visualization_summary_report(plots_dir):
 
     print(f"Visualization summary report saved to: {report_path}")
 
-# Updated run_evaluation_v2 function with integrated enhanced visualizations
-def run_evaluation_v2(results_dir: str, gt_dir: str, output_file: str = "evaluation_results.json",
-                      img_width: int = 450, img_height: int = 4002):
-    """
-    Your complete evaluation function with enhanced visualizations integrated.
-    """
-    from collections import defaultdict
-    import json
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import os
-    import warnings
-    warnings.filterwarnings('ignore')
-
-    all_results = {}
-    all_metrics = defaultdict(list)
-
-    # For plotting - collect data as we go
-    plot_data = []
-
-    # Track statistics
-    total_evaluations = 0
-    successful_evaluations = 0
-    failed_evaluations = 0
-
-    print(f"Evaluating results from: {results_dir}")
-    print(f"Ground truth from: {gt_dir}")
-    print(f"Image size: {img_width}x{img_height}")
-
-    # Walk through results directory structure: model/method/sequence
-    for model_name in sorted(os.listdir(results_dir)):
-        model_path = os.path.join(results_dir, model_name)
-        if not os.path.isdir(model_path):
-            continue
-
-        print(f"\n{'=' * 60}")
-        print(f"Model: {model_name}")
-        print(f"{'=' * 60}")
-        all_results[model_name] = {}
-
-        for method_name in sorted(os.listdir(model_path)):
-            method_path = os.path.join(model_path, method_name)
-            if not os.path.isdir(method_path):
-                continue
-
-            print(f"\n  Method: {method_name}")
-            print(f"  {'-' * 50}")
-            all_results[model_name][method_name] = {}
-
-            for sequence_name in sorted(os.listdir(method_path)):
-                sequence_path = os.path.join(method_path, sequence_name)
-                if not os.path.isdir(sequence_path):
-                    continue
-
-                # Find matching ground truth sequence
-                gt_sequence_path = find_ground_truth_sequence(gt_dir, sequence_name)
-
-                if not gt_sequence_path:
-                    print(f"    {sequence_name:<30} - Warning: No GT found")
-                    all_results[model_name][method_name][sequence_name] = {"error": "No ground truth found"}
-                    failed_evaluations += 1
-                    continue
-
-                total_evaluations += 1
-                print(f"    {sequence_name:<30} - ", end="")
-
-                try:
-                    metrics = evaluate_sequence(sequence_path, gt_sequence_path, (img_width, img_height))
-
-                    if "error" in metrics:
-                        print(f"Error: {metrics['error']}")
-                        failed_evaluations += 1
-                        all_results[model_name][method_name][sequence_name] = metrics
-                    else:
-                        all_results[model_name][method_name][sequence_name] = metrics
-                        successful_evaluations += 1
-
-                        # Collect for plotting
-                        plot_data.append({
-                            'model': model_name,
-                            'method': method_name,
-                            'sequence': sequence_name,
-                            'MOTA': metrics.get('MOTA', 0),
-                            'IDF1': metrics.get('IDF1', 0),
-                            'MOTP': metrics.get('MOTP', 0),
-                            'Precision': metrics.get('Precision', 0),
-                            'Recall': metrics.get('Recall', 0),
-                            'frames_processed': metrics.get('frames_processed', 0)
-                        })
-
-                        # Collect metrics for summary
-                        for metric_name, value in metrics.items():
-                            if isinstance(value, (int, float)) and metric_name not in ['error', 'frames_processed']:
-                                all_metrics[f"{model_name}_{method_name}_{metric_name}"].append(value)
-                                all_metrics[f"overall_{metric_name}"].append(value)
-
-                        print(f"MOTA: {metrics.get('MOTA', 0):.3f}, "
-                              f"IDF1: {metrics.get('IDF1', 0):.3f}, "
-                              f"MOTP: {metrics.get('MOTP', 0):.3f}, "
-                              f"Frames: {metrics.get('frames_processed', 0)}")
-
-                except Exception as e:
-                    print(f"Error: {str(e)}")
-                    all_results[model_name][method_name][sequence_name] = {"error": str(e)}
-                    failed_evaluations += 1
-
-    # Compute summary statistics
-    summary_stats = {}
-    for metric_name, values in all_metrics.items():
-        if values:
-            summary_stats[metric_name] = {
-                'mean': float(np.mean(values)),
-                'std': float(np.std(values)),
-                'min': float(np.min(values)),
-                'max': float(np.max(values)),
-                'median': float(np.median(values)),
-                'count': len(values)
-            }
-
-    # Create performance summary by model and method
-    model_method_summary = {}
-    for model_name in all_results:
-        model_method_summary[model_name] = {}
-        for method_name in all_results[model_name]:
-            valid_results = [res for res in all_results[model_name][method_name].values()
-                             if isinstance(res, dict) and 'error' not in res]
-
-            if valid_results:
-                model_method_summary[model_name][method_name] = {
-                    'count': len(valid_results),
-                    'total_frames': sum(r.get('frames_processed', 0) for r in valid_results),
-                    'avg_MOTA': float(np.mean([r['MOTA'] for r in valid_results])),
-                    'avg_IDF1': float(np.mean([r['IDF1'] for r in valid_results])),
-                    'avg_MOTP': float(np.mean([r['MOTP'] for r in valid_results])),
-                    'avg_Precision': float(np.mean([r['Precision'] for r in valid_results])),
-                    'avg_Recall': float(np.mean([r['Recall'] for r in valid_results])),
-                }
-
-    # Save results
-    final_results = {
-        'detailed_results': all_results,
-        'summary_statistics': summary_stats,
-        'model_method_summary': model_method_summary,
-        'evaluation_info': {
-            'total_evaluations': total_evaluations,
-            'successful_evaluations': successful_evaluations,
-            'failed_evaluations': failed_evaluations,
-            'success_rate': successful_evaluations / total_evaluations if total_evaluations > 0 else 0,
-            'image_size': [img_width, img_height],
-            'results_directory': results_dir,
-            'ground_truth_directory': gt_dir
-        }
-    }
-
-    with open(output_file, 'w') as f:
-        json.dump(final_results, f, indent=2)
-
-    # Print comprehensive summary
-    print(f"\n{'=' * 80}")
-    print("EVALUATION SUMMARY")
-    print(f"{'=' * 80}")
-    print(f"Results saved to: {output_file}")
-    print(f"Total evaluations: {total_evaluations}")
-    print(f"Successful: {successful_evaluations}")
-    print(f"Failed: {failed_evaluations}")
-    print(f"Success rate: {successful_evaluations / total_evaluations * 100:.1f}%" if total_evaluations > 0 else "N/A")
-
-    # Print overall metrics
-    print(f"\n{'Overall Performance Metrics':<40}")
-    print(f"{'-' * 60}")
-    key_metrics = ['overall_MOTA', 'overall_IDF1', 'overall_MOTP', 'overall_Precision', 'overall_Recall']
-    for metric in key_metrics:
-        if metric in summary_stats:
-            stats = summary_stats[metric]
-            metric_name = metric.replace('overall_', '')
-            print(f"{metric_name:<15}: {stats['mean']:.3f} ± {stats['std']:.3f} "
-                  f"(min: {stats['min']:.3f}, max: {stats['max']:.3f}, n={stats['count']})")
-
-    # Print top performing combinations (extended metrics)
-    print(f"\n{'Top Performing Model-Method Combinations (by MOTA)':<100}")
-    print(f"{'-' * 120}")
-
-    # Collect all combinations
-    all_combinations = []
-    for model in model_method_summary:
-        for method in model_method_summary[model]:
-            combo_data = model_method_summary[model][method]
-            all_combinations.append((
-                f"{model}_{method}",
-                combo_data.get('avg_MOTA', 0.0),
-                combo_data.get('avg_IDF1', 0.0),
-                combo_data.get('avg_MOTP', 0.0),
-                combo_data.get('avg_Precision', 0.0),
-                combo_data.get('avg_Recall', 0.0),
-                combo_data['count'],
-                combo_data['total_frames']
-            ))
-
-    # Define column widths
-    name_width = 65
-    metric_width = 10
-
-    # Print header
-    print(f"\n{'Model_Method':<{name_width}}"
-          f"{'MOTA':<{metric_width}}"
-          f"{'IDF1':<{metric_width}}"
-          f"{'MOTP':<{metric_width}}"
-          f"{'Precision':<{metric_width}}"
-          f"{'Recall':<{metric_width}}"
-          f"{'Seqs':<6}"
-          f"{'Frames':<10}")
-    print("-" * (name_width + 5 * metric_width + 6 + 10))
-
-    # Print all combinations
-    for combo in all_combinations:
-        print(f"{combo[0]:<{name_width}}"
-              f"{combo[1]:<{metric_width}.3f}"
-              f"{combo[2]:<{metric_width}.3f}"
-              f"{combo[3]:<{metric_width}.3f}"
-              f"{combo[4]:<{metric_width}.3f}"
-              f"{combo[5]:<{metric_width}.3f}"
-              f"{combo[6]:<6}"
-              f"{combo[7]:<10}")
-
-    report_path = "methods_performance_report.txt"
-    with open(report_path, "w") as f:
-        f.write(f"{'Model_Method':<{name_width}}"
-                f"{'MOTA':<{metric_width}}"
-                f"{'IDF1':<{metric_width}}"
-                f"{'MOTP':<{metric_width}}"
-                f"{'Precision':<{metric_width}}"
-                f"{'Recall':<{metric_width}}"
-                f"{'Seqs':<6}"
-                f"{'Frames':<10}\n")
-        f.write("-" * (name_width + 5 * metric_width + 6 + 10) + "\n")
-
-    # CREATE ENHANCED VISUALIZATIONS
-    if plot_data:
-        print("\nGenerating enhanced visualizations...")
-        df = pd.DataFrame(plot_data)
-
-        plots_dir = os.path.join(os.path.dirname(output_file), 'plots')
-        os.makedirs(plots_dir, exist_ok=True)
-
-        create_comprehensive_visualizations(df, plots_dir)
-
-        print(f"Enhanced visualizations saved to: {plots_dir}")
-
-    return final_results
-
 def create_performance_report(results_file: str, output_csv: str = "performance_report.csv"):
     """Create a CSV report from evaluation results"""
     with open(results_file, 'r') as f:
@@ -1192,9 +1302,9 @@ def create_performance_report(results_file: str, output_csv: str = "performance_
 
 def main():
     parser = argparse.ArgumentParser(description='Multi-Object Tracking Evaluation for BoxMOT Results')
-    parser.add_argument('--results_dir', type=str, default='boxmot_results',
-                        help='Directory containing tracking results (default: boxmot_results)')
-    parser.add_argument('--gt_dir', type=str, default='video_annotations',
+    parser.add_argument('--results_dir', type=str, default='box_mot_new_results',
+                        help='Directory containing tracking results (default: box_mot_new_results)')
+    parser.add_argument('--gt_dir', type=str, default='../../video_annotations_copy',
                         help='Directory containing ground truth annotations (default: video_annotations)')
     parser.add_argument('--output', type=str, default='evaluation_results.json',
                         help='Output JSON file for results')

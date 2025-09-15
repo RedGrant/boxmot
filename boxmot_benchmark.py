@@ -75,6 +75,7 @@ def run_boxmot_tracking(yolo_model_path, video_path, method, conf_level=0.25):
         "--tracking-method", method,
         "--save",
         "--save-txt",
+        "--show-trajectories",
         "--fps", str(fps),
         "--conf", str(conf_level)
     ]
@@ -206,7 +207,7 @@ def main():
 
                     if boxmot_output_dir:
                         # Organize results
-                        final_output_dir = "boxmot_results"
+                        final_output_dir = "/media/pedroguedes/GUEDES_PHD/box_mot_new_results"
                         model_full_name = f"{yolo_model_type}_{model_name}"
 
                         organize_results(
